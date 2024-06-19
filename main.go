@@ -159,7 +159,7 @@ func unresolved(owner, repo string, pr int) {
 		body := strings.ReplaceAll(comment.Get("body").Str, "\n", "\\n")
 		user := comment.Get("author.login").Str
 
-		fmt.Printf("[%s]%s:%d: %s\n", user, filename, int(lineno), body)
+		fmt.Printf("[%s] %s:%d: %s\n", user, filename, int(lineno), body)
 	}
 }
 
