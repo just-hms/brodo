@@ -135,7 +135,6 @@ func prs() (string, string, []int) {
 
 	res := gjson.Get(string(out), "#.number")
 
-	// todo: add check
 	var prnos []int
 	for _, pri := range res.Array() {
 		prnos = append(prnos, int(pri.Int()))
@@ -159,7 +158,6 @@ func unresolved(owner, repo string, pr int) {
 		panic(err)
 	}
 
-	// todo: add some checks herez
 	threads := gjson.Get(string(out), "data.repository.pullRequest.reviewThreads.edges.#.node")
 
 	for _, thread := range threads.Array() {
