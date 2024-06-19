@@ -12,9 +12,13 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func diff(against string) {
-	// todo: show only todos in comments
-	out, err := exec.Command("git", "diff", against).Output()
+func diff() {
+	def, err := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short").Output()
+	if err != nil {
+		panic(err)
+	}
+
+	out, err := exec.Command("git", "diff", strings.TrimSpace(string(def))).Output()
 	if err != nil {
 		panic(err)
 	}
@@ -61,12 +65,21 @@ func branchrefs() {
 	currentBranch := strings.TrimSpace(string(out))
 	currentBranchNo := strings.Split(currentBranch, "-")[0]
 
-	// todo: traverse only src files
 	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if info.IsDir() {
+			// skipping hidden dirs
+			if strings.HasPrefix(info.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// skipping hidden files
+		if strings.HasPrefix(info.Name(), ".") {
 			return nil
 		}
 
@@ -164,9 +177,8 @@ func unresolved(owner, repo string, pr int) {
 }
 
 func main() {
-	// todo: find the current branch
-	diff("origin/main")
-	// branchrefs()
+	diff()
+	branchrefs()
 	owner, repo, prs := prs()
 	for _, pr := range prs {
 		unresolved(owner, repo, pr)
