@@ -13,6 +13,7 @@ import (
 )
 
 func diff(against string) {
+	// todo: show only todos in comments
 	out, err := exec.Command("git", "diff", against).Output()
 	if err != nil {
 		panic(err)
@@ -60,6 +61,7 @@ func branchrefs() {
 	currentBranch := strings.TrimSpace(string(out))
 	currentBranchNo := strings.Split(currentBranch, "-")[0]
 
+	// todo: traverse only src files
 	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -144,15 +146,14 @@ func unresolved(owner, repo string, pr int) {
 		panic(err)
 	}
 
-	// todo: add some checks here
+	// todo: add some checks herez
 	threads := gjson.Get(string(out), "data.repository.pullRequest.reviewThreads.edges.#.node")
 
 	for _, thread := range threads.Array() {
 		if thread.Get("isResolved").Bool() {
 			continue
 		}
-
-		comment := thread.Get("comments.0.nodes.0")
+		comment := thread.Get("comments.nodes.0")
 		filename := comment.Get("path").Str
 		lineno := comment.Get("line").Float()
 		body := strings.ReplaceAll(comment.Get("body").Str, "\n", "\\n")
@@ -164,8 +165,8 @@ func unresolved(owner, repo string, pr int) {
 
 func main() {
 	// todo: find the current branch
-	diff("origin/develop")
-	branchrefs()
+	diff("origin/main")
+	// branchrefs()
 	owner, repo, prs := prs()
 	for _, pr := range prs {
 		unresolved(owner, repo, pr)
