@@ -144,6 +144,7 @@ func unresolved(owner, repo string, pr int) {
 		panic(err)
 	}
 
+	// todo: add some checks here
 	threads := gjson.Get(string(out), "data.repository.pullRequest.reviewThreads.edges.#.node")
 
 	for _, thread := range threads.Array() {
