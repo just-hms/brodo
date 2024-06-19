@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/tidwall/gjson"
 )
@@ -175,10 +176,24 @@ func unresolved(owner, repo string, pr int) {
 }
 
 func main() {
-	diff()
-	branchrefs()
-	owner, repo, prs := prs()
-	for _, pr := range prs {
-		unresolved(owner, repo, pr)
+	fs := []func(){
+		func() {
+			owner, repo, prs := prs()
+			for _, pr := range prs {
+				unresolved(owner, repo, pr)
+			}
+		},
+		diff,
+		branchrefs,
 	}
+
+	var wg sync.WaitGroup
+	for _, f := range fs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f()
+		}()
+	}
+	wg.Wait()
 }
