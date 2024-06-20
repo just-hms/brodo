@@ -2,26 +2,27 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/errgroup"
 )
 
-func diff() {
+func diff() error {
 	def, err := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short").Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	out, err := exec.Command("git", "diff", strings.TrimSpace(string(def))).Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	diffOutput := string(out)
@@ -55,12 +56,13 @@ func diff() {
 			lineno++
 		}
 	}
+	return nil
 }
 
-func branchrefs() {
+func branchrefs() error {
 	out, err := exec.Command("git", "branch", "--show-current").Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	currentBranch := strings.TrimSpace(string(out))
@@ -95,12 +97,18 @@ func branchrefs() {
 		}
 		return nil
 	})
+	return nil
 }
 
-func prs() (string, string, []int) {
+type repo struct {
+	owner string
+	name  string
+}
+
+func fetchRepo() (repo, error) {
 	out, err := exec.Command("git", "config", "--get", "remote.origin.url").Output()
 	if err != nil {
-		panic(err)
+		return repo{}, err
 	}
 
 	remoteURL := strings.TrimSpace(string(out))
@@ -111,16 +119,24 @@ func prs() (string, string, []int) {
 	} else if strings.HasPrefix(remoteURL, "git@github.com:") {
 		ownerRepo = strings.TrimSuffix(remoteURL[len("git@github.com:"):], ".git")
 	} else {
-		panic("Unsupported remote URL format")
+		return repo{}, fmt.Errorf("unsupported remote URL format: %q", ownerRepo)
 	}
 
 	ownerRepoParts := strings.Split(ownerRepo, "/")
-	owner := ownerRepoParts[0]
-	repo := ownerRepoParts[1]
+	if len(ownerRepoParts) < 2 {
+		return repo{}, fmt.Errorf("repo url wrong format: %q", ownerRepo)
+	}
 
-	out, err = exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+	return repo{
+		owner: ownerRepoParts[0],
+		name:  ownerRepoParts[1],
+	}, nil
+}
+func prs(owner, repo string) ([]int, error) {
+
+	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	branch := strings.TrimSpace(string(out))
@@ -131,7 +147,7 @@ func prs() (string, string, []int) {
 		fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s", owner, repo, owner, branch),
 	).Output()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	res := gjson.Get(string(out), "#.number")
@@ -141,13 +157,13 @@ func prs() (string, string, []int) {
 		prnos = append(prnos, int(pri.Int()))
 	}
 
-	return owner, repo, prnos
+	return prnos, nil
 }
 
 //go:embed query.gql
 var query string
 
-func unresolved(owner, repo string, pr int) {
+func unresolved(owner, repo string, pr int) error {
 	out, err := exec.Command(
 		"gh", "api", "graphql",
 		"-f", fmt.Sprintf("owner=%s", owner),
@@ -156,44 +172,74 @@ func unresolved(owner, repo string, pr int) {
 		"-f", fmt.Sprintf("query=%s", query),
 	).Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	threads := gjson.Get(string(out), "data.repository.pullRequest.reviewThreads.edges.#.node")
+	outFmt := gjson.Get(string(out), `data.repository.pullRequest.reviewThreads.edges.#.node.{isResolved,comments.nodes.#.{"filename":path,"lineno":line,body,"author":author.login}}`)
 
-	for _, thread := range threads.Array() {
-		if thread.Get("isResolved").Bool() {
+	type Comment struct {
+		Filename string
+		Lineno   int
+		Body     string
+		Author   string
+	}
+	type Thread struct {
+		IsResolved bool
+		Comments   []Comment
+	}
+
+	threads := []Thread{}
+	err = json.Unmarshal([]byte(outFmt.Raw), &threads)
+	if err != nil {
+		return fmt.Errorf("response is malformed: %q", string(out))
+	}
+
+	for _, thread := range threads {
+		if thread.IsResolved {
 			continue
 		}
-		comment := thread.Get("comments.nodes.0")
-		filename := comment.Get("path").Str
-		lineno := comment.Get("line").Float()
-		body := strings.ReplaceAll(comment.Get("body").Str, "\n", "\\n")
-		user := comment.Get("author.login").Str
-
-		fmt.Printf("[%s] %s:%d: %s\n", user, filename, int(lineno), body)
+		if len(thread.Comments) == 0 {
+			continue
+		}
+		topComment := thread.Comments[0]
+		body := strings.ReplaceAll(topComment.Body, "\n", "\\n")
+		fmt.Printf("[%s] %s:%d: %s\n", topComment.Author, topComment.Filename, topComment.Lineno, body)
 	}
+
+	return nil
+}
+
+func gh() error {
+	repo, err := fetchRepo()
+	if err != nil {
+		return err
+	}
+	prs, err := prs(repo.owner, repo.name)
+	if err != nil {
+		return err
+	}
+	for _, pr := range prs {
+		err := unresolved(repo.owner, repo.name, pr)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func main() {
-	fs := []func(){
-		func() {
-			owner, repo, prs := prs()
-			for _, pr := range prs {
-				unresolved(owner, repo, pr)
-			}
-		},
+	fs := []func() error{
+		gh,
 		diff,
 		branchrefs,
 	}
 
-	var wg sync.WaitGroup
+	var wg errgroup.Group
 	for _, f := range fs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			f()
-		}()
+		wg.Go(f)
 	}
-	wg.Wait()
+	err := wg.Wait()
+	if err != nil {
+		fmt.Println(err)
+	}
 }
