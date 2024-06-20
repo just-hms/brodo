@@ -15,12 +15,7 @@ import (
 )
 
 func diff() error {
-	def, err := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short").Output()
-	if err != nil {
-		return err
-	}
-
-	out, err := exec.Command("git", "diff", strings.TrimSpace(string(def))).Output()
+	out, err := exec.Command("git", "diff").Output()
 	if err != nil {
 		return err
 	}
@@ -133,7 +128,6 @@ func fetchRepo() (repo, error) {
 	}, nil
 }
 func prs(owner, repo string) ([]int, error) {
-
 	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return nil, err
@@ -150,13 +144,13 @@ func prs(owner, repo string) ([]int, error) {
 		return nil, err
 	}
 
-	res := gjson.Get(string(out), "#.number")
+	raw := gjson.GetBytes(out, "#.number").Raw
 
 	var prnos []int
-	for _, pri := range res.Array() {
-		prnos = append(prnos, int(pri.Int()))
+	err = json.Unmarshal([]byte(raw), &prnos)
+	if err != nil {
+		return nil, err
 	}
-
 	return prnos, nil
 }
 
@@ -175,7 +169,7 @@ func unresolved(owner, repo string, pr int) error {
 		return err
 	}
 
-	outFmt := gjson.Get(string(out), `data.repository.pullRequest.reviewThreads.edges.#.node.{isResolved,comments.nodes.#.{"filename":path,"lineno":line,body,"author":author.login}}`)
+	raw := gjson.GetBytes(out, `data.repository.pullRequest.reviewThreads.edges.#.node.{isResolved,"comments":comments.nodes.#.{"filename":path,"lineno":line,body,"author":author.login}}`).Raw
 
 	type thread struct {
 		IsResolved bool
@@ -188,7 +182,7 @@ func unresolved(owner, repo string, pr int) error {
 	}
 
 	threads := []thread{}
-	err = json.Unmarshal([]byte(outFmt.Raw), &threads)
+	err = json.Unmarshal([]byte(raw), &threads)
 	if err != nil {
 		return fmt.Errorf("response is malformed: %q", string(out))
 	}
