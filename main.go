@@ -177,18 +177,17 @@ func unresolved(owner, repo string, pr int) error {
 
 	outFmt := gjson.Get(string(out), `data.repository.pullRequest.reviewThreads.edges.#.node.{isResolved,comments.nodes.#.{"filename":path,"lineno":line,body,"author":author.login}}`)
 
-	type Comment struct {
-		Filename string
-		Lineno   int
-		Body     string
-		Author   string
-	}
-	type Thread struct {
+	type thread struct {
 		IsResolved bool
-		Comments   []Comment
+		Comments   []struct {
+			Filename string
+			Lineno   int
+			Body     string
+			Author   string
+		}
 	}
 
-	threads := []Thread{}
+	threads := []thread{}
 	err = json.Unmarshal([]byte(outFmt.Raw), &threads)
 	if err != nil {
 		return fmt.Errorf("response is malformed: %q", string(out))
