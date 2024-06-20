@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,9 +15,29 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// git reflog `git branch --show-current` | tail -n1 | awk '{print $1}' | xargs git diff
 func diff() error {
-	// todo: check if the todo is shown if committed
-	out, err := exec.Command("git", "diff").Output()
+	out, err := exec.Command("git", "branch", "--show-current").Output()
+	if err != nil {
+		return err
+	}
+
+	branch := strings.TrimSpace(string(out))
+
+	out, err = exec.Command("git", "reflog", branch).Output()
+	if err != nil {
+		return err
+	}
+
+	reflogLines := strings.Split(string(out), "\n")
+	if len(reflogLines) == 0 {
+		return errors.New("no reflog entries found")
+	}
+
+	branchCreationCommit := reflogLines[len(reflogLines)-2]
+	firstCommitHash := strings.Fields(branchCreationCommit)[0]
+
+	out, err = exec.Command("git", "diff", firstCommitHash).Output()
 	if err != nil {
 		return err
 	}
