@@ -17,7 +17,7 @@ import (
 //
 // equivalent to: git reflog `git branch --show-current` | tail -n1 | awk '{print $1}' | xargs git diff
 func diff(repo repo) error {
-	out, err := execx.Command("git", "reflog", repo.curBranch).Run()
+	out, err := execx.Command("git", "reflog", repo.curBranch).Output()
 	if err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func diff(repo repo) error {
 	branchCreationCommit := reflogLines[len(reflogLines)-2]
 	firstCommitHash := strings.Fields(branchCreationCommit)[0]
 
-	out, err = execx.Command("git", "diff", firstCommitHash).Run()
+	out, err = execx.Command("git", "diff", firstCommitHash).Output()
 	if err != nil {
 		return err
 	}
@@ -77,13 +77,13 @@ type repo struct {
 func info() (repo, error) {
 	repo := repo{}
 
-	out, err := execx.Command("git", "branch", "--show-current").Run()
+	out, err := execx.Command("git", "branch", "--show-current").Output()
 	if err != nil {
 		return repo, err
 	}
 	repo.curBranch = strings.TrimSpace(string(out))
 
-	out, err = execx.Command("git", "config", "--get", "remote.origin.url").Run()
+	out, err = execx.Command("git", "config", "--get", "remote.origin.url").Output()
 	if err != nil {
 		return repo, err
 	}
@@ -115,7 +115,7 @@ func fetchPrsNo(repo repo) ([]int, error) {
 		"gh", "api",
 		"-H", "Accept:application/vnd.github+json",
 		fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s", repo.owner, repo.name, repo.owner, repo.curBranch),
-	).Run()
+	).Output()
 
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func unresolved(repo repo, pr int) error {
 		"-f", fmt.Sprintf("repo=%s", repo.name),
 		"-F", fmt.Sprintf("pr=%d", pr),
 		"-f", fmt.Sprintf("query=%s", qComments),
-	).Run()
+	).Output()
 	if err != nil {
 		return err
 	}
