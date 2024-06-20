@@ -15,6 +15,7 @@ import (
 )
 
 func diff() error {
+	// todo: check if the todo is shown if committed
 	out, err := exec.Command("git", "diff").Output()
 	if err != nil {
 		return err
