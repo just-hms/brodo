@@ -3,12 +3,12 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os/exec"
+	"log"
 	"strconv"
 	"strings"
 
+	"github.com/just-hms/brodo/execx"
 	"github.com/tidwall/gjson"
 	"golang.org/x/sync/errgroup"
 )
@@ -17,20 +17,20 @@ import (
 //
 // equivalent to: git reflog `git branch --show-current` | tail -n1 | awk '{print $1}' | xargs git diff
 func diff(repo repo) error {
-	out, err := exec.Command("git", "reflog", repo.curBranch).Output()
+	out, err := execx.Command("git", "reflog", repo.curBranch).Run()
 	if err != nil {
 		return err
 	}
 
 	reflogLines := strings.Split(string(out), "\n")
 	if len(reflogLines) == 0 {
-		return errors.New("no reflog entries found")
+		return err
 	}
 
 	branchCreationCommit := reflogLines[len(reflogLines)-2]
 	firstCommitHash := strings.Fields(branchCreationCommit)[0]
 
-	out, err = exec.Command("git", "diff", firstCommitHash).Output()
+	out, err = execx.Command("git", "diff", firstCommitHash).Run()
 	if err != nil {
 		return err
 	}
@@ -68,31 +68,6 @@ func diff(repo repo) error {
 	return nil
 }
 
-// issuerefs prints each issue linked to the current pr and referenced in the code
-func issuerefs(repo repo, prsno []int) error {
-	issues := []int{}
-	for _, pr := range prsno {
-		prIssue, err := fetchIssues(repo, pr)
-		if err != nil {
-			return err
-		}
-		issues = append(issues, prIssue...)
-	}
-
-	formatted := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		formatted = append(formatted, fmt.Sprintf("#%d", issue))
-	}
-
-	out, err := exec.Command("grep", "-IHrin", strings.Join(formatted, "\\|")).Output()
-	if err != nil {
-		// grep fails if output is empty (i just would like to print nothing)
-		return nil
-	}
-	fmt.Print(string(out))
-	return nil
-}
-
 type repo struct {
 	owner     string
 	name      string
@@ -102,13 +77,13 @@ type repo struct {
 func info() (repo, error) {
 	repo := repo{}
 
-	out, err := exec.Command("git", "branch", "--show-current").Output()
+	out, err := execx.Command("git", "branch", "--show-current").Run()
 	if err != nil {
 		return repo, err
 	}
 	repo.curBranch = strings.TrimSpace(string(out))
 
-	out, err = exec.Command("git", "config", "--get", "remote.origin.url").Output()
+	out, err = execx.Command("git", "config", "--get", "remote.origin.url").Run()
 	if err != nil {
 		return repo, err
 	}
@@ -136,11 +111,11 @@ func info() (repo, error) {
 
 // fetchPrsNo fetches all the pr linked to the current branch
 func fetchPrsNo(repo repo) ([]int, error) {
-	out, err := exec.Command(
+	out, err := execx.Command(
 		"gh", "api",
 		"-H", "Accept:application/vnd.github+json",
 		fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s", repo.owner, repo.name, repo.owner, repo.curBranch),
-	).Output()
+	).Run()
 
 	if err != nil {
 		return nil, err
@@ -155,43 +130,18 @@ func fetchPrsNo(repo repo) ([]int, error) {
 	return prs, nil
 }
 
-//go:embed issues.gql
-var qIssues string
-
-func fetchIssues(repo repo, pr int) ([]int, error) {
-	out, err := exec.Command(
-		"gh", "api", "graphql",
-		"-f", fmt.Sprintf("owner=%s", repo.owner),
-		"-f", fmt.Sprintf("repo=%s", repo.name),
-		"-F", fmt.Sprintf("pr=%d", pr),
-		"-f", fmt.Sprintf("query=%s", qIssues),
-	).Output()
-	if err != nil {
-		return nil, err
-	}
-
-	raw := gjson.GetBytes(out, `data.repository.pullRequest.closingIssuesReferences.nodes.#.number`).Raw
-
-	issues := []int{}
-	err = json.Unmarshal([]byte(raw), &issues)
-	if err != nil {
-		return nil, fmt.Errorf("issues: err: %s, response is malformed: %q", err, string(out))
-	}
-	return issues, nil
-}
-
 //go:embed comments.gql
 var qComments string
 
 // unresolved print all unresolved conversation in the specified pr
 func unresolved(repo repo, pr int) error {
-	out, err := exec.Command(
+	out, err := execx.Command(
 		"gh", "api", "graphql",
 		"-f", fmt.Sprintf("owner=%s", repo.owner),
 		"-f", fmt.Sprintf("repo=%s", repo.name),
 		"-F", fmt.Sprintf("pr=%d", pr),
 		"-f", fmt.Sprintf("query=%s", qComments),
-	).Output()
+	).Run()
 	if err != nil {
 		return err
 	}
@@ -235,11 +185,6 @@ func gh(repo repo) error {
 		return err
 	}
 
-	err = issuerefs(repo, prsno)
-	if err != nil {
-		return err
-	}
-
 	for _, pr := range prsno {
 		err := unresolved(repo, pr)
 		if err != nil {
@@ -252,7 +197,7 @@ func gh(repo repo) error {
 func main() {
 	r, err := info()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	fs := []func(repo) error{
@@ -266,6 +211,6 @@ func main() {
 	}
 	err = wg.Wait()
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal(err)
 	}
 }
