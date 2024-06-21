@@ -58,7 +58,8 @@ func diff(repo repo) error {
 		}
 
 		if strings.HasPrefix(line, "+") && (strings.Contains(line, "TODO") || strings.Contains(line, "todo")) {
-			fmt.Printf("%s:%d: %s\n", filename, lineno, line[1:])
+			content := strings.TrimSpace(line[1:])
+			fmt.Printf("%s:%d: %s\n", filename, lineno, content)
 		}
 
 		if !strings.HasPrefix(line, "-") {
