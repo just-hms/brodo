@@ -2,26 +2,37 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"log"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/just-hms/brodo/execx"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/errgroup"
 )
 
-func diff() {
-	def, err := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short").Output()
+// diff prints each todo created added in the current pr
+//
+// equivalent to: git reflog `git branch --show-current` | tail -n1 | awk '{print $1}' | xargs git diff
+func diff(repo repo) error {
+	out, err := execx.Command("git", "reflog", repo.curBranch).Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	out, err := exec.Command("git", "diff", strings.TrimSpace(string(def))).Output()
+	reflogLines := strings.Split(string(out), "\n")
+	if len(reflogLines) == 0 {
+		return err
+	}
+
+	branchCreationCommit := reflogLines[len(reflogLines)-2]
+	firstCommitHash := strings.Fields(branchCreationCommit)[0]
+
+	out, err = execx.Command("git", "diff", firstCommitHash).Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	diffOutput := string(out)
@@ -55,52 +66,27 @@ func diff() {
 			lineno++
 		}
 	}
+	return nil
 }
 
-func branchrefs() {
-	out, err := exec.Command("git", "branch", "--show-current").Output()
+type repo struct {
+	owner     string
+	name      string
+	curBranch string
+}
+
+func info() (repo, error) {
+	repo := repo{}
+
+	out, err := execx.Command("git", "branch", "--show-current").Output()
 	if err != nil {
-		panic(err)
+		return repo, err
 	}
+	repo.curBranch = strings.TrimSpace(string(out))
 
-	currentBranch := strings.TrimSpace(string(out))
-	currentBranchNo := strings.Split(currentBranch, "-")[0]
-
-	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			// skipping hidden dirs
-			if strings.HasPrefix(info.Name(), ".") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// skipping hidden files
-		if strings.HasPrefix(info.Name(), ".") {
-			return nil
-		}
-
-		lines, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for lineno, line := range strings.Split(string(lines), "\n") {
-			if strings.Contains(line, currentBranchNo) {
-				fmt.Printf("%s:%d: %s\n", path, lineno+1, strings.TrimSpace(line))
-			}
-		}
-		return nil
-	})
-}
-
-func prs() (string, string, []int) {
-	out, err := exec.Command("git", "config", "--get", "remote.origin.url").Output()
+	out, err = execx.Command("git", "config", "--get", "remote.origin.url").Output()
 	if err != nil {
-		panic(err)
+		return repo, err
 	}
 
 	remoteURL := strings.TrimSpace(string(out))
@@ -111,89 +97,121 @@ func prs() (string, string, []int) {
 	} else if strings.HasPrefix(remoteURL, "git@github.com:") {
 		ownerRepo = strings.TrimSuffix(remoteURL[len("git@github.com:"):], ".git")
 	} else {
-		panic("Unsupported remote URL format")
+		return repo, fmt.Errorf("unsupported remote URL format: %q", ownerRepo)
 	}
 
 	ownerRepoParts := strings.Split(ownerRepo, "/")
-	owner := ownerRepoParts[0]
-	repo := ownerRepoParts[1]
-
-	out, err = exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		panic(err)
+	if len(ownerRepoParts) < 2 {
+		return repo, fmt.Errorf("repo url wrong format: %q", ownerRepo)
 	}
 
-	branch := strings.TrimSpace(string(out))
+	repo.owner, repo.name = ownerRepoParts[0], ownerRepoParts[1]
 
-	out, err = exec.Command(
-		"gh", "api",
-		"-H", "Accept:application/vnd.github+json",
-		fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s", owner, repo, owner, branch),
-	).Output()
-	if err != nil {
-		panic(err)
-	}
-
-	res := gjson.Get(string(out), "#.number")
-
-	var prnos []int
-	for _, pri := range res.Array() {
-		prnos = append(prnos, int(pri.Int()))
-	}
-
-	return owner, repo, prnos
+	return repo, nil
 }
 
-//go:embed query.gql
-var query string
+// fetchPrsNo fetches all the pr linked to the current branch
+func fetchPrsNo(repo repo) ([]int, error) {
+	out, err := execx.Command(
+		"gh", "api",
+		"-H", "Accept:application/vnd.github+json",
+		fmt.Sprintf("/repos/%s/%s/pulls?head=%s:%s", repo.owner, repo.name, repo.owner, repo.curBranch),
+	).Output()
 
-func unresolved(owner, repo string, pr int) {
-	out, err := exec.Command(
+	if err != nil {
+		return nil, err
+	}
+	raw := gjson.GetBytes(out, `#.number`).Raw
+
+	var prs []int
+	err = json.Unmarshal([]byte(raw), &prs)
+	if err != nil {
+		return nil, fmt.Errorf("err: %s, response is malformed: %q", err, string(out))
+	}
+	return prs, nil
+}
+
+//go:embed comments.gql
+var qComments string
+
+// unresolved print all unresolved conversation in the specified pr
+func unresolved(repo repo, pr int) error {
+	out, err := execx.Command(
 		"gh", "api", "graphql",
-		"-f", fmt.Sprintf("owner=%s", owner),
-		"-f", fmt.Sprintf("repo=%s", repo),
+		"-f", fmt.Sprintf("owner=%s", repo.owner),
+		"-f", fmt.Sprintf("repo=%s", repo.name),
 		"-F", fmt.Sprintf("pr=%d", pr),
-		"-f", fmt.Sprintf("query=%s", query),
+		"-f", fmt.Sprintf("query=%s", qComments),
 	).Output()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	threads := gjson.Get(string(out), "data.repository.pullRequest.reviewThreads.edges.#.node")
+	raw := gjson.GetBytes(out, `data.repository.pullRequest.reviewThreads.edges.#.node.{isResolved,"comments":comments.nodes.#.{"filename":path,"lineno":line,body,"author":author.login}}`).Raw
 
-	for _, thread := range threads.Array() {
-		if thread.Get("isResolved").Bool() {
+	type thread struct {
+		IsResolved bool
+		Comments   []struct {
+			Filename string
+			Lineno   int
+			Body     string
+			Author   string
+		}
+	}
+
+	threads := []thread{}
+	err = json.Unmarshal([]byte(raw), &threads)
+	if err != nil {
+		return fmt.Errorf("err: %s, response is malformed: %q", err, string(out))
+	}
+
+	for _, thread := range threads {
+		if thread.IsResolved {
 			continue
 		}
-		comment := thread.Get("comments.nodes.0")
-		filename := comment.Get("path").Str
-		lineno := comment.Get("line").Float()
-		body := strings.ReplaceAll(comment.Get("body").Str, "\n", "\\n")
-		user := comment.Get("author.login").Str
-
-		fmt.Printf("[%s] %s:%d: %s\n", user, filename, int(lineno), body)
+		if len(thread.Comments) == 0 {
+			continue
+		}
+		topComment := thread.Comments[0]
+		body := strings.ReplaceAll(topComment.Body, "\n", "\\n")
+		fmt.Printf("[%s] %s:%d: %s\n", topComment.Author, topComment.Filename, topComment.Lineno, body)
 	}
+
+	return nil
+}
+
+func gh(repo repo) error {
+	prsno, err := fetchPrsNo(repo)
+	if err != nil {
+		return err
+	}
+
+	for _, pr := range prsno {
+		err := unresolved(repo, pr)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func main() {
-	fs := []func(){
-		func() {
-			owner, repo, prs := prs()
-			for _, pr := range prs {
-				unresolved(owner, repo, pr)
-			}
-		},
-		diff,
-		branchrefs,
+	r, err := info()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	var wg sync.WaitGroup
-	for _, f := range fs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			f()
-		}()
+	fs := []func(repo) error{
+		gh,
+		diff,
 	}
-	wg.Wait()
+
+	var wg errgroup.Group
+	for _, f := range fs {
+		wg.Go(func() error { return f(r) })
+	}
+	err = wg.Wait()
+	if err != nil {
+		log.Fatal(err)
+	}
 }
