@@ -4,7 +4,7 @@
 
 # brodo
 
-`br`anch to`do` is a way to find out what needs to be done in your branch before is ready to be merged
+`br`anch t`odo` is a way to find out what needs to be done in your branch before is ready to be merged
 
 usage:
 
