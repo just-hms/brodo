@@ -82,9 +82,13 @@ func main() {
 					return !slices.ContainsFunc(comments, func(c *sit.Range) bool { return c.Contains(sit.Point(add.Point)) })
 				})
 
-				// TODO: ideally git blame for todos
 				for _, add := range todoAdditions {
-					fmt.Printf("[TODO] %s:%d %s\n", file, add.Row+1, add.Content)
+					blame, err := git.Blame(info, file, add.Row+1)
+					if err != nil {
+						log.Print(err)
+						continue
+					}
+					fmt.Printf("[%s] %s:%d %s\n", blame, file, add.Row+1, add.Content)
 				}
 			}
 			return nil

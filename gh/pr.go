@@ -19,7 +19,6 @@ func FetchPrs(i *git.Info) ([]*PR, error) {
 	var res []*PR
 
 	for _, repo := range repos {
-		// TODO: vulnerable to command injection
 		out, err := execx.Command(
 			"gh", "api",
 			"-H", "Accept:application/vnd.github+json",
