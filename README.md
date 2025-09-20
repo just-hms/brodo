@@ -12,10 +12,12 @@ usage:
 cd /path/to/your/project
 git checkout your-branch
 brodo
+brodo --pattern '// TODO:\ '
+brodo --pattern '// TODO:\ ' <branch> # add a branch if no PR exists
 ```
 
 ## Install
 
 ```bash
-go install github.com/just-hms/brodo@latest
+go install github.com/just-hms/brodo@main
 ```
