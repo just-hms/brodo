@@ -19,5 +19,5 @@ brodo --pattern '// TODO:\ ' <branch> # add a branch if no PR exists
 ## Install
 
 ```bash
-go install github.com/just-hms/brodo@main
+go install github.com/just-hms/brodo@latest
 ```
